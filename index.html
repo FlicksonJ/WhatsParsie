@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Offline WhatsApp Archive</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .whatsapp-bg { 
+            background-color: #efeae2; 
+            background-image: url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png'); 
+        }
+    </style>
+</head>
+<body class="bg-[#dadbd3]">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState } = React;
+
+        // --- THE PARSER ---
+        const parseChat = (text) => {
+            const regex = /^\[?(\d{2}[/.]\d{2}[/.]\d{2,4}),?\s(\d{1,2}:\d{2}(?::\d{2})?\s?[APM]?)\]?\s?(?:- )?([^:]+):\s([\s\S]+?)(?=\n\[?\d{2}[/.]\d{2}[/.]\d{2,4}|$)/gm;
+            const messages = [];
+            let match;
+            while ((match = regex.exec(text)) !== null) {
+                messages.push({
+                    date: match[1],
+                    time: match[2],
+                    sender: match[3].trim(),
+                    content: match[4].trim(),
+                    isMe: match[3].toLowerCase().includes("flickson") // Highlights your messages
+                });
+            }
+            return messages;
+        };
+
+        function App() {
+            const [chats, setChats] = useState({});
+            const [activeId, setActiveId] = useState(null);
+            const [isLoading, setIsLoading] = useState(false);
+
+            // --- THE UPDATED FOLDER LOADER ---
+            const handleOpenFolder = async () => {
+                try {
+                    const dirHandle = await window.showDirectoryPicker();
+                    setIsLoading(true);
+                    const newChats = {};
+
+                    for await (const entry of dirHandle.values()) {
+                        if (entry.name.endsWith('.zip')) {
+                            const file = await entry.getFile();
+                            const zip = await JSZip.loadAsync(file);
+                            
+                            // Find any .txt file inside the zip (fixes the naming issue)
+                            const fileNames = Object.keys(zip.files);
+                            const txtFileName = fileNames.find(name => name.endsWith('.txt'));
+
+                            if (txtFileName) {
+                                const chatFile = zip.file(txtFileName);
+                                const text = await chatFile.async("string");
+                                const name = entry.name.replace("WhatsApp Chat with ", "").replace(".zip", "");
+                                
+                                const parsedMessages = parseChat(text);
+                                
+                                // Fallback if regex doesn't match the specific date format
+                                if (parsedMessages.length === 0) {
+                                    newChats[name] = [{ 
+                                        isMe: false, sender: "System", time: "",
+                                        content: "File found, but dates couldn't be parsed. Regex might need tweaking for this chat's format." 
+                                    }];
+                                } else {
+                                    newChats[name] = parsedMessages;
+                                }
+                            }
+                        }
+                    }
+                    
+                    setChats(newChats);
+                    setIsLoading(false);
+                    
+                } catch (error) {
+                    console.error("Error reading folder:", error);
+                    setIsLoading(false);
+                    alert("Could not load folder. Make sure you are using Chrome/Edge.");
+                }
+            };
+
+            return (
+                <div className="h-screen w-full flex items-center justify-center p-4">
+                    <div className="w-full max-w-6xl h-full bg-white shadow-2xl flex overflow-hidden rounded-lg">
+                        
+                        {/* Sidebar */}
+                        <div className="w-80 border-r flex flex-col bg-white">
+                            <div className="p-4 bg-[#f0f2f5] flex justify-between items-center border-b">
+                                <div className="w-10 h-10 rounded-full bg-gray-300"></div>
+                                <button 
+                                    onClick={handleOpenFolder} 
+                                    disabled={isLoading}
+                                    className="bg-[#00a884] text-white px-3 py-1 rounded text-sm font-bold shadow-sm disabled:opacity-50"
+                                >
+                                    {isLoading ? "LOADING..." : "LOAD FOLDER"}
+                                </button>
+                            </div>
+                            <div className="flex-1 overflow-y-auto">
+                                {Object.keys(chats).length === 0 && !isLoading && (
+                                    <div className="p-10 text-center text-gray-400 text-sm">No chats loaded</div>
+                                )}
+                                {Object.keys(chats).map(name => (
+                                    <div 
+                                        key={name}
+                                        onClick={() => setActiveId(name)}
+                                        className={`p-4 border-b flex items-center cursor-pointer hover:bg-[#f5f6f6] ${activeId === name ? 'bg-[#f0f2f5]' : ''}`}
+                                    >
+                                        <div className="w-12 h-12 rounded-full bg-blue-200 mr-3 flex-shrink-0 flex items-center justify-center font-bold text-blue-600">
+                                            {name.substring(0, 2).toUpperCase()}
+                                        </div>
+                                        <div className="overflow-hidden">
+                                            <div className="font-semibold text-sm truncate">{name}</div>
+                                            <div className="text-xs text-gray-500 truncate">
+                                                {chats[name][chats[name].length - 1]?.content || "Click to view"}
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Chat Window */}
+                        <div className="flex-1 flex flex-col whatsapp-bg relative">
+                            {activeId ? (
+                                <>
+                                    <div className="p-3 bg-[#f0f2f5] border-b flex items-center sticky top-0 z-10 shadow-sm">
+                                        <div className="w-10 h-10 rounded-full bg-blue-200 mr-3 flex items-center justify-center font-bold text-blue-600">
+                                            {activeId.substring(0, 2).toUpperCase()}
+                                        </div>
+                                        <div className="font-bold text-sm">{activeId}</div>
+                                    </div>
+                                    <div className="flex-1 overflow-y-auto p-6 space-y-2">
+                                        {chats[activeId].map((m, i) => (
+                                            <div key={i} className={`flex ${m.isMe ? 'justify-end' : 'justify-start'}`}>
+                                                <div className={`max-w-md px-3 py-1.5 rounded-lg shadow-sm text-sm relative ${m.isMe ? 'bg-[#dcf8c6]' : 'bg-white'}`}>
+                                                    {!m.isMe && <div className="text-[10px] font-bold text-blue-500 mb-0.5">{m.sender}</div>}
+                                                    <div className="pr-10 whitespace-pre-wrap">{m.content}</div>
+                                                    <div className="text-[10px] text-gray-400 absolute bottom-1 right-2">{m.time}</div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </>
+                            ) : (
+                                <div className="flex-1 flex flex-col items-center justify-center text-gray-500">
+                                    <div className="w-64 h-64 bg-gray-200 rounded-full mb-4 opacity-20"></div>
+                                    <h2 className="text-2xl font-light">WhatsApp Archive Viewer</h2>
+                                    <p className="text-sm mt-2">Click "LOAD FOLDER" and select a directory containing your exported .zip files.</p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
